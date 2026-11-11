@@ -1,0 +1,160 @@
+DEVELOPER HANDOFF  /  VERSION 1.0
+Distribution Management System
+Phase 1 product requirements and implementation specification
+The Distribution Management System (DMS) is a multi-tenant SaaS application for Pakistani distributors. Each distributor manages its own sales team, assigned areas, shop directory and orders. Salespeople use a mobile app to record shop visits and capture orders. The distributor reviews those orders and hands them off for dispatch and delivery.
+The first release must make a remote “No order” submission as difficult as a remote order submission. Both require the same server-side location check at the assigned shop. The distributor can then distinguish a verified visit with no order from a shop with no verified visit.
+01  Release Scope
+Required in Phase 1
+Platform administration, business registration, tenant isolation, user accounts and role-based access.
+Salesperson management, area assignments, a daily visit plan and a shop directory with approval of field-submitted shops.
+Foreground location verification, visit outcomes, catalog orders, urgent custom requests and a supervised exception queue.
+Distributor order review, basic dispatch and delivery status, activity history, weekly reports and CSV export.
+Proposed implementation defaults
+Use an Android-first field app and responsive web dashboards for business and platform admins. Build on Next.js, FastAPI and PostgreSQL. Begin the location pilot at a 10 m radius with online verification and locally saved drafts. These are proposed defaults for the developer to estimate and test with the first distributor.
+How to read this specification
+
+
+02  Roles and Business Onboarding
+A tenant is one distributor business. Areas, users, shop records, activity, exports and catalog data belong to that tenant. A business admin has operational control within the business. Platform administration is a separate permission boundary.
+
+Registration and credentials
+Business registration asks for business name, city, contact name, phone and verified owner email. Proposed flow is Pending review → Active or Rejected. The platform admin can provision a business directly. Pending and suspended businesses have operating access blocked.
+Business admins enter each salesperson’s name, phone, username and assigned areas. Sign-in uses business code, username and password. Usernames are case-insensitively unique per tenant. Issue a one-time activation secret or link and let the salesperson set their password. Provide reset and forced sign-out controls. Admins may set a temporary credential with mandatory change at first login.
+Require MFA for platform and business admins. Deactivating a salesperson or suspending a tenant revokes active sessions and blocks pending writes. Deactivated users stay visible on historical visits and orders.
+Platform dashboard
+Provide searchable business and onboarding queues, tenant status and account totals, admin and salesperson provisioning, and a platform audit log. Require a reason and tenant selection for support access and account changes. Record the actor, tenant, action and time. Sensitive support access expires and is read-only by default.
+
+03  Shops Areas and Daily Plans
+Areas and assignments
+An area is a tenant-defined territory such as a market, neighbourhood or sales route. In Phase 1, each shop belongs to one active area and a salesperson can hold multiple area assignments. Use the shop’s area ID for territory permissions. The location check in Section 04 verifies proximity to the shop pin.
+Business admins assign and revoke areas, including temporary coverage with start and end dates. The API checks active tenant membership, current area assignment and active shop status on both check-in and submission. Reassignment or archival during a visit requires a fresh eligibility check. Preserve the area and salesperson recorded on past visits and orders.
+Shop registration and approval
+
+Provide a validated CSV import for existing shops. Preview invalid rows and likely duplicates. Import only rows with a valid area and pin, and require explicit admin confirmation before activation.
+Daily visit plan
+The business admin schedules dated stops by salesperson using active shops within current assignments. Support adding, reordering, reassigning and cancelling stops. Snapshot the scheduled salesperson, shop and local service date for reporting, retaining plan revisions. A salesperson can also make a verified ad hoc visit to an eligible shop. Show it separately from planned coverage.
+A planned stop remains open until the salesperson submits a verified outcome, the admin cancels or reassigns it, or the local day closes. A failed check-in or an open exception keeps the stop unresolved. A completed stop links to one visit record even when that visit generates both an order and a custom request.
+
+04  Location Verification
+A salesperson may browse eligible shop details and directions from anywhere. The visit form unlocks after successful check-in, and the server checks eligibility and location again when the salesperson submits an outcome, order or custom request from that visit.
+1.  Check-in. The server issues a one-time challenge for the authenticated salesperson, device session and shop. The app requests a fresh foreground location fix and submits the coordinates, reported horizontal accuracy, fix age and available mock-location signals. Use device monotonic time for the client’s fix-age calculation and server time for challenge expiry and event timestamps.
+2.  Server decision. Resolve the tenant, user, active area assignment and approved shop pin. Validate location inputs and compute distance in metres from the fix to the stored pin using a geodesic calculation. Proposed pilot rules are radius 10 m, reported accuracy at most the smaller of 10 m and the shop radius, and a fix age of at most 30 seconds within a 60-second server challenge. Accept distance at or inside the radius. Reject missing, malformed, stale or flagged mock fixes.
+3.  Visit grant. Bind the grant to the tenant, salesperson, session, shop, active pin version and visit. Give it a proposed 15-minute lifetime. At submit, use a new challenge and fresh fix, recheck the same rules and write the outcome and linked records in one transaction. An expired grant requires a new check-in. A committed request retry returns the saved result through its idempotency key.
+4.  Failure handling. Explain distance, low accuracy, missing precise permission or lost connection and offer retry. A failed attempt creates an event with a reason code where the API is reachable. The salesperson may save a local draft or request review. Reconnection requires a fresh check. Drafts and pending reviews remain outside verified visit totals.
+Field reliability and exception handling
+Use 5–10 m as the target range. Smartphone GPS can degrade near buildings or indoors, and reported accuracy is an estimate. Pilot at real storefronts and record false rejects and false accepts, including neighbouring shops. Any radius outside the target range requires an approved, audited shop-level exception. Keep the radius, policy version, pin version, distance, accuracy, server timestamp and result with the evidence.
+GPS provides evidence of handset proximity. A business admin may close an exception with a reason and supporting detail, or enter a separate office order for an urgent case. Keep these actions in the activity log and separate from verified visits and field conversion. Flag repeated failed checks and suspicious patterns for review. Treat client-reported fix age and mock flags as risk signals alongside server-controlled challenges. Use foreground checks only in Phase 1.
+Technical references  GPS accuracy guidance  •  Android location API
+
+05  Salesperson App and Visit Outcomes
+Field screens
+Provide sign-in, Today, Assigned Shops, Shop Detail, New Shop Proposal, Visit and Order Form, Requests, and My Activity. Today shows planned stops and the status of each stop. Shop Detail shows address, landmark, directions, approval state and the check-in action. Make the location state, order total and submit result visible on a small screen.
+
+Order entry and urgent requests
+Search products by name or SKU. Show selling unit and PKR price. Use positive quantities in supported selling units such as piece, pack or carton. Display the server-calculated total at submission. Apply only configured catalog prices and price rules. If prices or product availability change before submission, require review of affected lines and confirmation.
+A custom request is a trackable record with item description, requested quantity or free-text requirements, priority, optional requested-by time, callback details and a note. It can accompany a catalog order or stand alone. Show a reference ID and status after submission. Use an urgent badge and an in-app notification for admins.
+On a weak or disconnected network, retain a draft and show its local state. After reconnecting at the shop, reverify and submit. Store local drafts under the account, protect them with app storage controls, and clear or lock them on sign-out. After an uncertain response, look up the original submission or retry with the same key.
+A submitted field outcome is immutable to the salesperson. Admin corrections require a reason and preserve the original outcome and evidence. For a genuine second visit, require another check-in and keep its visit ID distinct. Require the salesperson to intentionally start a revisit if the previous stop was already completed.
+
+06  Distributor Order and Delivery Workflow
+Catalog and order intake
+Business admins manage active products, SKUs, units and PKR prices. Phase 1 supports manual entry and a validated CSV import for products. Retain the SKU, unit, price and quantity on each order line so later edits to the catalog preserve existing records. Represent monetary values with fixed precision. The API calculates totals from order lines.
+The order inbox shows origin, shop, salesperson when applicable, area, requested items, totals, urgency and current status. Admins can open an order, approve or reject it, or make an audited adjustment before confirmation. Preserve requested quantities, record confirmed quantities separately and show who changed them. Block edits to confirmed terms unless an authorized admin cancels and creates a linked replacement before dispatch.
+
+Manual orders and custom requests
+Business admins can create orders for active shops, including orders taken by phone. Record order origin and creator. Custom requests move from New to In review, then Converted, Declined or Closed. The admin can assign a request owner, set a due date and add updates. Converting a request links it to a single order and updates both records atomically. A conversion from a verified field visit keeps that attribution. A request entered by an admin is attributed to the office.
+Phase 1 includes one fulfilment outcome per order and a printable order summary or dispatch sheet. Inventory availability, partial deliveries, invoicing, cash collections and returns are expansion modules. Keep confirmation and delivery data structured so these modules can be added later.
+
+07  Business Dashboard and Reporting
+The dashboard shows today’s route coverage, submitted orders, orders waiting for action, urgent requests, pending shop approvals and exceptions. Provide a salesperson activity timeline with planned stops, verified visits and outcomes, order changes, shop proposals, and check-in failures with reason codes. Include last recorded activity and a map of submitted visit events for authorized admins. Show open stops, orders awaiting confirmation or dispatch, and unclosed requests by salesperson.
+Weekly salesperson summary
+Use the business time zone, with Asia/Karachi as the default and Monday through Sunday as the proposed reporting week. Store event timestamps in UTC. Filter by date range, area, salesperson, shop, outcome and order status as applicable. Date reports use the visit submission time, planned service date or order lifecycle timestamp according to the metric.
+
+Exports and visibility
+Support filtered CSV exports for visits, orders and weekly summaries. Keep screen and export metric definitions identical. Include report period, local time zone, area and salesperson where applicable. Restrict raw location evidence to authorized operational views and audit its access. Give salespeople a view of their own activity and submission status.
+
+08  Data Model and API
+Use versioned database migrations and a documented REST API. Assign stable IDs to records. Add tenant-aware foreign keys and uniqueness constraints where appropriate. Apply tenant isolation to related records, files, exports, jobs and cached results. Index list and report queries by tenant, date and the applicable salesperson, area, shop or status.
+
+API contracts and consistency
+Provide routes for authentication, business onboarding, memberships, area assignments, shops and approval, daily plans, catalog, visits, orders, custom requests, reports and exports. Use pagination on list endpoints and document field validation, access rules and state transitions in OpenAPI.
+Field sequence is request challenge, verify check-in, request submit challenge, then submit visit. The submit payload includes the visit grant, new fix, outcome, lines or custom request, and idempotency key. Return the persisted visit and related record IDs. Use stable error codes for out of radius, low accuracy, expired challenge, revoked assignment and changed prices.
+Scope idempotency keys to tenant, actor and operation. An identical retry returns the original result. Reusing a key with a changed payload returns a conflict. Consume challenges and enforce uniqueness transactionally. Use row locking or version checks for concurrent approvals, plan changes, conversions and order transitions.
+Write visit, order, request and audit data atomically where they form one action. Publish notifications after commit using an outbox or equivalent retryable queue. Show operational failures with a correlation ID and keep location coordinates and contact details out of general logs.
+
+09  Production and Security Requirements
+Architecture and deployment
+Use Next.js for the two web dashboards, FastAPI for business rules and PostgreSQL for operational data. A native Android app, or a cross-platform app with native Android location support, serves the field team. Proposed pilot hosting is Vercel for web and Railway for API and PostgreSQL. Keep development, staging and production credentials and data separate. Use private object storage for attachments and backups.
+Tenant isolation and account protection
+Resolve tenant access on the server from the authenticated user and active membership. Scope each request to tenant and role, including direct record links, attachment downloads, exports and background jobs. Use tenant-aware database constraints and row-level security as a second boundary where supported by the architecture.
+Use managed authentication or a vetted password-hashing library and secure credential reset flows. Enforce HTTPS, secure token storage and session revocation. Rate-limit sign-in and high-risk actions. Restrict privileged endpoints and require MFA for administrative access.
+Write append-only audit events for approval, rejection, assignment changes, pin edits, access changes, exception decisions, manual orders, exports and support actions. Store actor, tenant, time, record ID, reason when required and changed fields. Protect audit storage from ordinary tenant writes and restrict audit exports.
+Location and operational reliability
+Explain foreground location collection in the app and at onboarding. Restrict raw coordinates to authorized staff. Agree retention and access policies before rollout. A proposed pilot default is 90 days for raw check evidence, followed by retaining only the derived verification outcome and permitted reporting fields under the agreed policy.
+Monitor API failures, verification rejections by cause, failed exports, notification backlog and backup status. Maintain automated backups and prove recovery on staging. Proposed pilot recovery objectives are at most 24 hours of data loss and restoration within 4 hours. Confirm these with the business owner before launch.
+Use production alerts, rate limits, rollout and rollback procedures, and a support runbook. Test on lower-cost Android phones and weak mobile data, including denied precise location, expired sessions and app restarts. Keep text and layouts ready for Urdu localization and use PKR and Pakistan phone formatting.
+Technical reference  OWASP multi-tenant security guidance
+
+10  Release Acceptance and Roadmap
+
+Build and rollout sequence
+Build tenant access and shop setup first, then pilot location checks before expanding order entry. Add the catalog, order lifecycle and weekly reports after verified visit capture works. Deliver migrations, API documentation, a staging environment, test accounts, deployment and restore instructions, and pilot results.
+Before rollout, the owner and developer agree the permitted radius and accuracy thresholds, field device coverage, retention policy, whether multiple salespeople can cover the same route, and who performs delivery updates. Agree pilot volumes and acceptable verification failure rates. If adjacent-shop false accepts remain high, require a shopkeeper code before broader rollout.
+Expansion after Phase 1
+Add shopkeeper confirmation through a rotating QR code or one-time code, fuller offline review, route optimization and scheduled repeat visits.
+Add warehouse stock and reservations, partial fulfilment, proof of delivery, returns, invoicing, credit limits and collections.
+Add business branches, granular dispatch roles, price lists and promotions, ERP or accounting integration, and SaaS plans and billing once onboarding and usage are established.
+Section | Content
+02–04 | Roles, shop onboarding, area planning and location checks
+05–07 | Visits, order fulfilment, dashboards and reporting
+08–10 | Data model, API and production requirements, acceptance and roadmap
+
+Role | Phase 1 permissions
+Platform super admin | Create or approve businesses, view tenant status and aggregate activity, suspend or reactivate tenants, and provision a business admin or salesperson for a selected tenant. Use a scoped, audited support workflow for access to tenant records.
+Business admin | Manage the business profile, field accounts, areas, plans, shops, product catalog, orders and dispatch. Review exceptions, see reports, and export tenant data. Assign admin access to authorized staff and retain at least one active admin.
+Salesperson | View assigned shops and daily stops, propose a shop in an assigned area, verify a visit and submit outcomes or requests. View own submissions and status within the tenant. Access to new work follows current assignments.
+
+Step | Required behaviour
+1  Create or propose | Collect shop name, contact person, phone, address or landmark, city, area and entrance pin. Field submissions capture a fresh location with accuracy and proposer identity. Optional storefront photo can help review.
+2  Review | The business admin sees the proposed pin, source, accuracy and possible duplicates by normalized phone, name or nearby pin. Multiple shops may share a contact. The admin checks the entrance location and corrects it before approval if needed.
+3  Approve or reject | Approval makes the shop available to assigned salespeople. A business admin can add an active shop directly using the same required fields and validation. Pending shops accept no visit submissions or orders. Record a rejection reason and allow the proposer to correct and resubmit.
+4  Maintain | Admins can archive a shop or discard a pending proposal from active queues while retaining audit history. Pin or area changes require a reason, create a new shop location version and invalidate outstanding visit grants where applicable.
+
+Outcome | What the salesperson records
+Order placed | At least one valid catalog line with product, selling unit and quantity. Optional notes and an urgent custom request may be added to the same visit.
+No order | Select a required reason such as sufficient stock, price objection, or credit or payment issue. Add a note for Other. The normal verified location rule applies.
+Shop closed | Record a verified stop using a distinct outcome. The dashboard separates closed shops from completed sales conversations and missed stops.
+Contact unavailable | Use when the shop is open and the person who places orders is unavailable. Add a note if helpful.
+Custom request only | Capture an urgent or non-catalog item without adding a priced order line. The distributor reviews the request and can convert it to an order.
+
+Order state | Allowed next steps and required record
+Submitted | Confirm or reject. Record the approver, time and any adjustment or rejection reason.
+Confirmed | Dispatch or cancel before handoff. Record the dispatch owner or salesperson, time and optional reference.
+Dispatched | Mark delivered or delivery failed. Capture the date, recipient or delivery note, and a reason for failed delivery.
+Delivery failed | Re-dispatch or close as undelivered with a reason. Preserve the prior delivery attempt.
+Delivered, rejected, cancelled, closed undelivered | Terminal states. Use a linked correction or replacement where applicable and preserve the original order history.
+
+Metric | Definition
+Planned coverage | Verified completed planned stops ÷ non-cancelled stops assigned for the selected service dates. A completed stop is counted once. Unresolved past stops appear as missed. Ad hoc visits are listed separately.
+Verified visits and no orders | Count distinct verified visit IDs by outcome. Show No order, Closed, Contact unavailable and Custom request only separately. A failed check or reviewed exception has its own count.
+Field conversion | Verified visits that produced at least one field order ÷ all verified visits in the period. Include orders linked by custom-request conversion, and show pending requests separately. Report zero-denominator rates as blank.
+Order counts and value | Count distinct orders by origin and current status. Show submitted, confirmed and delivered PKR values separately using the relevant event date and recorded totals. Report office orders separately in field activity.
+Visit duration | If shown, use server time from successful check-in to verified submission. Label it as recorded visit duration. A day’s first and last recorded events describe activity span.
+
+Record group | Minimum fields and relationships
+Identity and business | Tenant, User, Membership, Session. Membership links user, tenant, role and status. Tenant stores business code, time zone and operational status.
+Territory and shops | Area, AreaAssignment, Shop, ShopProposal, ShopLocationVersion, PlannedStop. Shop has one active area and approved entrance pin. Plan and location edits preserve history.
+Visits and evidence | LocationChallenge, VisitGrant, CheckAttempt, Visit, VisitException. Visit belongs to a salesperson and shop and optionally a planned stop. Evidence stores a policy version and references the accepted checks.
+Catalog and fulfilment | Product, Order, OrderLine, OrderEvent, DeliveryAttempt, CustomRequest. Order stores origin, monetary totals, actor and optional visit. Line records preserve requested and confirmed values.
+Operations | Notification, AuditEvent and IdempotencyRecord. Use tenant-scoped action keys, event timestamps, actor IDs and correlation IDs. Keep sensitive audit details restricted.
+
+ID | Minimum acceptance test
+A01 | Two businesses create similar users and shops. Direct IDs, search, exports and attachment URLs expose data only to authorized tenant users.
+A02 | A field-proposed shop stays unavailable for orders until approved. Rejection, correction and approval record actor and time.
+A03 | A salesperson at Shop A can submit at Shop A with a fresh valid fix. The API blocks an order, no-order outcome or custom request for Shop B outside radius.
+A04 | An unassigned shop, revoked assignment, archived shop, changed pin, stale or mock fix and expired challenge each block the relevant field write.
+A05 | A lost response and concurrent retry save one visit and one set of linked records. Offline drafts require a fresh online verification. Office orders and exceptions stay separate in field reporting.
+A06 | An urgent request appears in the admin queue and converts to one linked order. Dispatch and delivery transitions preserve a timestamped history.
+A07 | A seeded weekly report reconciles planned, verified, missed, no-order, office and field records across dashboard and CSV, including the local week boundary.
+A08 | Account revocation takes effect on active sessions. The team completes a staging restore, verifies location evidence permissions, and signs off the field pilot on representative routes.
+
